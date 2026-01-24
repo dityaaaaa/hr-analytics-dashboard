@@ -4,10 +4,28 @@ import joblib
 import numpy as np
 import os
 import warnings
+import plotly.express as px
+import plotly.graph_objects as go
 
 # --- 1. CONFIG & SETUP ---
-st.set_page_config(page_title="HR Attrition (Model Based)", layout="wide")
+st.set_page_config(page_title="HR Attrition Pro (AI Dashboard)", layout="wide", initial_sidebar_state="expanded")
 warnings.filterwarnings("ignore")
+
+# Custom CSS for better aesthetics - Adaptive to theme
+st.markdown("""
+<style>
+    .stMetric {
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+    }
+    .priority-card {
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- 2. FITUR TARGET (WAJIB SESUAI MODEL) ---
 TARGET_FEATURES = [
@@ -37,155 +55,189 @@ def load_model():
     file_path = os.path.join(current_dir, 'model_attrition.pkl')
     if os.path.exists(file_path):
         try:
-            return joblib.load(file_path)
-        except:
-            return None
-    return None
+            return joblib.load(file_path), None
+        except Exception as e:
+            return None, f"Error setup environment: {str(e)}"
+    return None, f"File {file_path} not found."
 
-model = load_model()
+model, model_error = load_model()
 
-# --- 4. DATA PROCESSING (PURE PREPROCESSING) ---
+# --- 4. DATA PROCESSING HELPERS ---
 def read_csv_safe(uploaded_file):
     if uploaded_file is not None:
         uploaded_file.seek(0)
         return pd.read_csv(uploaded_file)
     return None
 
-def process_data(df_gen, df_emp, df_mgr, df_in, df_out):
-    # 1. Merge Data
+def preprocess_classic(df_gen, df_emp, df_mgr, df_in, df_out):
+    # Merge Data
     df = df_gen.merge(df_emp, on='EmployeeID', how='left').merge(df_mgr, on='EmployeeID', how='left')
     
-    # 2. Hitung Jam Kerja (Mean Work Time)
+    # Calculate Mean Work Time
     df_in.set_index(df_in.columns[0], inplace=True)
     df_out.set_index(df_out.columns[0], inplace=True)
-    
     in_time_dt = df_in.apply(pd.to_datetime, errors='coerce')
     out_time_dt = df_out.apply(pd.to_datetime, errors='coerce')
-    
-    # Rata-rata jam kerja per hari
     mean_hours = (out_time_dt - in_time_dt).mean(axis=1).dt.total_seconds() / 3600
     df = df.merge(mean_hours.rename('mean_work_time'), left_on='EmployeeID', right_index=True, how='left')
-    
-    # 3. Cleaning Data
+    return df
+
+def preprocess_simplified(df_single):
+    # Mapping columns from single file to what the model expects
+    # In hr_analytics_for_modeling.csv, 'AvgWorkingHours' is already calculated
+    if 'AvgWorkingHours' in df_single.columns:
+        df_single['mean_work_time'] = df_single['AvgWorkingHours']
+    return df_single
+
+def finalize_for_model(df_raw):
+    # 1. Cleaning
     drop_cols = ['Attrition', 'EmployeeCount', 'Over18', 'StandardHours']
-    df_clean = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
+    df_clean = df_raw.drop(columns=[c for c in drop_cols if c in df_raw.columns], errors='ignore')
     
-    # 4. Imputasi (Isi Data Kosong)
-    # Penting agar model tidak error karena NaN
+    # 2. Imputation
     num_cols = df_clean.select_dtypes(include=[np.number]).columns
     cat_cols = df_clean.select_dtypes(exclude=[np.number]).columns
-    
     for c in num_cols: df_clean[c] = df_clean[c].fillna(df_clean[c].median())
     for c in cat_cols:
         if len(df_clean[c].mode()) > 0: df_clean[c] = df_clean[c].fillna(df_clean[c].mode()[0])
         else: df_clean[c] = df_clean[c].fillna('Unknown')
-        
-    return df, df_clean
+    
+    # 3. Format Strings for Categories
+    cols_to_str = ['Education', 'JobLevel', 'StockOptionLevel', 'EnvironmentSatisfaction']
+    for col in df_clean.columns:
+        if df_clean[col].dtype == 'object' or col in cols_to_str:
+             df_clean[col] = df_clean[col].astype(str).str.replace('.0', '')
+    
+    # 4. One-Hot & Reindex
+    X_final = pd.get_dummies(df_clean).reindex(columns=TARGET_FEATURES, fill_value=0)
+    return X_final
 
-# --- 5. UI UTAMA ---
-st.title("📊 HR Attrition Dashboard (Model Only)")
+# --- 5. UI COMPONENTS ---
+st.title("📊 Employee Attrition Analytics Dashboard")
 
 if model is None:
-    st.error("❌ Model 'model_attrition.pkl' tidak ditemukan di folder ini.")
+    st.error(f"❌ {model_error}")
     st.stop()
 
-# --- SIDEBAR ---
-st.sidebar.header("1. Upload Data")
-f_gen = st.sidebar.file_uploader("General Data", type='csv')
-f_emp = st.sidebar.file_uploader("Employee Survey", type='csv')
-f_mgr = st.sidebar.file_uploader("Manager Survey", type='csv')
-f_in  = st.sidebar.file_uploader("In Time", type='csv')
-f_out = st.sidebar.file_uploader("Out Time", type='csv')
+# SIDEBAR
+st.sidebar.header("Dashboard Settings")
+mode = st.sidebar.radio("Upload Mode", ["Simplified (1 CSV)", "Classic (5 CSVs)"])
+
+if mode == "Simplified (1 CSV)":
+    st.sidebar.subheader("1. Upload Your Data")
+    f_single = st.sidebar.file_uploader("Upload 'hr_analytics_for_modeling.csv'", type='csv')
+else:
+    st.sidebar.subheader("1. Upload Required Files")
+    f_gen = st.sidebar.file_uploader("General Data", type='csv')
+    f_emp = st.sidebar.file_uploader("Employee Survey", type='csv')
+    f_mgr = st.sidebar.file_uploader("Manager Survey", type='csv')
+    f_in  = st.sidebar.file_uploader("In Time Logs", type='csv')
+    f_out = st.sidebar.file_uploader("Out Time Logs", type='csv')
 
 st.sidebar.divider()
-st.sidebar.header("2. Kalibrasi Model")
-st.sidebar.markdown("Geser slider jika prediksi resign 0.")
-# SLIDER: Solusi untuk masalah "Prediksi 0"
-threshold = st.sidebar.slider(
-    "Batas Sensitivitas (Threshold)", 
-    min_value=0.1, max_value=0.9, value=0.5, step=0.05,
-    help="Default ML adalah 0.5. Jika hasil 0, coba turunkan ke 0.3 atau 0.2."
-)
+threshold = 0.32
 
-# --- EXECUTION ---
-if f_gen and f_emp and f_mgr and f_in and f_out:
-    if st.button("🚀 PREDIKSI SEKARANG"):
-        with st.spinner("Sedang menghitung prediksi model..."):
+# --- EXECUTION FLOW ---
+data_ready = False
+df_full = None
+
+if mode == "Simplified (1 CSV)" and f_single:
+    df_raw = read_csv_safe(f_single)
+    df_full = preprocess_simplified(df_raw)
+    data_ready = True
+elif mode == "Classic (5 CSVs)" and all([f_gen, f_emp, f_mgr, f_in, f_out]):
+    df_gen_raw = read_csv_safe(f_gen)
+    df_emp_raw = read_csv_safe(f_emp)
+    df_mgr_raw = read_csv_safe(f_mgr)
+    df_in_raw = read_csv_safe(f_in)
+    df_out_raw = read_csv_safe(f_out)
+    df_full = preprocess_classic(df_gen_raw, df_emp_raw, df_mgr_raw, df_in_raw, df_out_raw)
+    data_ready = True
+
+if data_ready:
+    if st.button("🚀 GO PREDICTTT!"):
+        with st.spinner("Processing Model Predictions..."):
             try:
-                # A. BACA FILE
-                df_gen = read_csv_safe(f_gen)
-                df_emp = read_csv_safe(f_emp)
-                df_mgr = read_csv_safe(f_mgr)
-                df_in = read_csv_safe(f_in)
-                df_out = read_csv_safe(f_out)
+                # Prediction Logic
+                X_final = finalize_for_model(df_full)
+                probs = model.predict_proba(X_final)[:, 1]
+                preds = (probs >= 0.32).astype(int)
                 
-                # B. PROSES DATA
-                df_full, df_ready = process_data(df_gen, df_emp, df_mgr, df_in, df_out)
+                # Build Result DF
+                results = df_full[['EmployeeID', 'Department', 'JobRole']].copy()
+                results['Probability'] = probs
+                results['Status'] = ['Resign 🔴' if x==1 else 'Stay 🟢' for x in preds]
                 
-                # C. FORMAT KE BENTUK MODEL (59 Fitur)
-                cols_to_str = ['Education', 'JobLevel', 'StockOptionLevel', 'EnvironmentSatisfaction']
-                for col in df_ready.columns:
-                    if df_ready[col].dtype == 'object' or col in cols_to_str:
-                         df_ready[col] = df_ready[col].astype(str).str.replace('.0', '')
-                
-                # One-Hot & Reindex
-                X_final = pd.get_dummies(df_ready).reindex(columns=TARGET_FEATURES, fill_value=0)
-                
-                # D. PREDIKSI (MENGGUNAKAN SLIDER)
-                # Ambil probabilitas murni dari model (angka 0.0 - 1.0)
-                if hasattr(model, "predict_proba"):
-                    probs = model.predict_proba(X_final)[:, 1]
-                else:
-                    # Fallback jika model tidak punya proba (jarang terjadi di Random Forest)
-                    st.warning("Model tidak mendukung probabilitas, menggunakan output kelas langsung.")
-                    probs = model.predict(X_final).astype(float)
-                
-                # Tentukan Resign/Tidak berdasarkan Slider User
-                preds = (probs >= threshold).astype(int)
-                
-                # E. HASIL OUTPUT
-                output = df_full[['EmployeeID', 'Department', 'JobRole']].copy()
-                output['Status'] = ['Resign 🔴' if x==1 else 'Stay 🟢' for x in preds]
-                output['Probability'] = probs
-                
-                # Kategori Risiko (Murni dari Probabilitas Model)
                 def get_risk_cat(p):
-                    if p >= 0.6: return 'High Risk 🔴'
-                    elif p >= 0.3: return 'Medium Risk 🟡'
+                    if p >= 0.6: return 'Critical High 🚨'
+                    elif p >= 0.32: return 'Medium Risk 🟡'
                     else: return 'Low Risk 🟢'
-                output['Risk Category'] = output['Probability'].apply(get_risk_cat)
+                results['Risk Category'] = results['Probability'].apply(get_risk_cat)
                 
-                # --- F. TAMPILAN DASHBOARD ---
-                st.success("Selesai! Hasil di bawah murni berasal dari Model.")
+                # --- VISUALIZATION SECTION ---
+                st.success("Analysis Complete!")
                 
-                # Hitung Statistik
-                total_karyawan = len(output)
-                total_resign = preds.sum()
-                pct_attrition = (total_resign / total_karyawan) * 100
+                # 1. Metrics Header
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Total Workforce", f"{len(results):,}")
+                m2.metric("Predicted Attrition", f"{preds.sum():,}", delta=f"{(preds.sum()/len(results)*100):.1f}% Rate")
+                m3.metric("Critical High Risk", f"{len(results[results['Probability'] >= 0.6]):,}")
                 
-                # Tampilkan Kartu Metrik
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Total Karyawan", f"{total_karyawan:,}")
-                col2.metric("Prediksi Resign", f"{total_resign:,}", help="Jumlah karyawan yang diprediksi keluar oleh model")
-                col3.metric("Persentase Attrition", f"{pct_attrition:.1f}%", help="Persentase karyawan yang diprediksi resign")
+                st.divider()
                 
-                # Pesan Bantuan jika Hasil Masih 0
-                if total_resign == 0:
-                    st.info(f"💡 Prediksi masih 0? Coba geser **Batas Sensitivitas** di sidebar ke kiri (misal: 0.2 atau 0.3).")
-                    # Tampilkan probabilitas tertinggi sebagai petunjuk
-                    max_prob = probs.max()
-                    st.write(f"ℹ️ *Info Debug: Probabilitas resign tertinggi yang ditemukan model adalah {max_prob:.1%}.*")
+                col_left, col_right = st.columns([1, 1])
                 
-                # Tabel Detail
-                st.subheader("📋 Detail Hasil Model")
-                st.dataframe(output[['EmployeeID', 'Status', 'Risk Category', 'Probability', 'Department', 'JobRole']].sort_values('Probability', ascending=False))
+                with col_left:
+                    st.subheader("Risk Distribution")
+                    risk_counts = results['Risk Category'].value_counts()
+                    fig_pie = px.pie(risk_counts, values=risk_counts.values, names=risk_counts.index, 
+                                   color=risk_counts.index,
+                                   color_discrete_map={'Critical High 🚨': '#ef5350', 'Medium Risk 🟡': '#ffca28', 'Low Risk 🟢': '#66bb6a'},
+                                   hole=.4)
+                    st.plotly_chart(fig_pie, use_container_width=True)
                 
-                # Download
-                st.download_button("Download CSV", output.to_csv(index=False).encode('utf-8'), "hasil_model_attrition.csv", "text/csv")
+                with col_right:
+                    st.subheader("Attrition by Department")
+                    dept_attr = results.groupby('Department')['Probability'].mean().sort_values(ascending=False).reset_index()
+                    fig_bar = px.bar(dept_attr, x='Department', y='Probability', 
+                                   title="Avg Risk per Dept", color='Probability',
+                                   color_continuous_scale='Reds')
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                st.divider()
+                
+                # Feature Importance~
+                st.subheader("Key Drivers of Attrition")
+                if hasattr(model, 'steps'):
+                    rf = model.steps[-1][1]
+                    importances = pd.Series(rf.feature_importances_, index=TARGET_FEATURES).sort_values(ascending=False).head(8)
+                    fig_imp = px.bar(importances, orientation='h', labels={'index': 'Feature', 'value': 'Importance Score'},
+                                   title="Top 8 Global Factors", color=importances.values, color_continuous_scale='Viridis')
+                    st.plotly_chart(fig_imp, use_container_width=True)
+
+                # Priority Intervention List
+                st.subheader("⚠️ Priority Intervention List")
+                st.info("Employees listed here have over 30% probability of resignation. Immediate HR review recommended.")
+                priority_list = results[results['Probability'] >= 0.3].sort_values('Probability', ascending=False)
+                st.dataframe(priority_list[['EmployeeID', 'Department', 'JobRole', 'Probability', 'Risk Category']], use_container_width=True)
+                
+                # Full Data Table
+                with st.expander("Show Full Employee List"):
+                    st.dataframe(results.sort_values('Probability', ascending=False))
+                
+                # Downloada
+                st.download_button("📥 Export Results to CSV", results.to_csv(index=False).encode('utf-8'), "hr_attrition_report.csv", "text/csv")
                 
             except Exception as e:
-                st.error(f"Terjadi Error: {e}")
+                st.error(f"Prediction Error: {e}")
                 import traceback
                 st.text(traceback.format_exc())
 else:
-    st.info("Silakan upload semua file data di sidebar.")
+    # Landing Page Info
+    st.info("👋 Welcome! Please upload your data in the sidebar to begin.")
+    st.markdown("""
+    ### How it works:
+    - **Simplified Mode**: Upload your model-ready single CSV file.
+    - **Classic Mode**: Upload the raw HR datasets (General, Surveys, Attendance).
+    - **AI Model**: We use a Random Forest algorithm (SMOTE-balanced) to predict attrition.
+    """)
