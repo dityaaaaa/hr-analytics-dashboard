@@ -174,34 +174,35 @@ if page == "📈 Model Overview":
         st.subheader("🔝 Top 5 Driver Attrisi Karyawan")
         st.markdown("*Faktor-faktor yang paling mempengaruhi keputusan resign karyawan*")
         
-        # Feature importance dari model Random Forest (Top 5 - dari actual model evaluation)
+        # Feature importance dari model Random Forest (Top 5 - sesuai gambar)
         feature_importance_data = {
-            'Status Pernikahan:\nSingle': 0.0471,
-            'Umur\n(Age)': 0.0410,
-            'Mobilitas Karir\n(CareerMobility)': 0.0403,
-            'Total Tahun Kerja\n(TotalWorkingYears)': 0.0383,
-            'Tahun di Perusahaan\n(YearsAtCompany)': 0.0364
+            'cat__MaritalStatus_Single': 0.055,
+            'num__OvertimeRatio': 0.051,
+            'num__Age': 0.049,
+            'num__TotalWorkingYears': 0.047,
+            'num__YearsAtCompany': 0.044
         }
-        
-        importance_df = pd.DataFrame(list(feature_importance_data.items()), 
+
+        importance_df = pd.DataFrame(list(feature_importance_data.items()),
                                     columns=['Faktor', 'Skor Pentingnya'])
         importance_df = importance_df.sort_values('Skor Pentingnya', ascending=True)
-        
+
         fig_imp = px.bar(importance_df, y='Faktor', x='Skor Pentingnya',
-                         title="Skor Pentingnya Setiap Faktor",
-                         color='Skor Pentingnya', color_continuous_scale='Blues',
+                         title="Feature Importance (Top 5)",
+                         color='Skor Pentingnya', color_continuous_scale='Viridis',
                          orientation='h')
-        fig_imp.update_layout(height=420, showlegend=False, 
+        fig_imp.update_layout(height=420, showlegend=False,
                              xaxis_title="Skor", yaxis_title="",
                              hovermode='closest')
         st.plotly_chart(fig_imp, use_container_width=True)
-        
-        # Penjelasan drivers
+
+        # Penjelasan drivers (singkat, business-friendly)
         st.markdown("""
         **📌 Insight Penting:**
-        - **Status Single** adalah faktor terkuat - fokus pada benefit keluarga
-        - **Usia muda** menunjukkan risiko tinggi - develop young talent program
-        - **Mobilitas karir** berpengaruh signifikan - provide clear career path
+        - **Marital Status — Single** (`cat__MaritalStatus_Single`) adalah driver terkuat; pertimbangkan dukungan keluarga/benefit
+        - **Overtime / Overtime Ratio** (`num__OvertimeRatio`) menunjukkan risiko tinggi terkait jam kerja berlebih
+        - **Age** (`num__Age`) dan **Total Working Years** (`num__TotalWorkingYears`) menunjukkan segmentasi usia/pengalaman berisiko
+        - **Years At Company** (`num__YearsAtCompany`) menandakan tenure-specific retention issues
         """)
 
     
@@ -350,11 +351,11 @@ if page == "📈 Model Overview":
     with col_rec_2:
         st.markdown("""
         #### 🔝 Top 5 Driver Attrisi:
-        1. � Status Pernikahan: Single (4.71%)
-        2. 👤 Umur (4.10%)
-        3. 📊 Mobilitas Karir (4.03%)
-        4. 📅 Total Tahun Kerja (3.83%)
-        5. 🏢 Tahun di Perusahaan (3.64%)
+        1. `cat__MaritalStatus_Single` — Status pernikahan: Single (paling berpengaruh)
+        2. `num__OvertimeRatio` — Rasio lembur / overtime
+        3. `num__Age` — Usia
+        4. `num__TotalWorkingYears` — Total tahun pengalaman kerja
+        5. `num__YearsAtCompany` — Lama bekerja di perusahaan
         """)
     
     st.markdown("""
@@ -451,6 +452,15 @@ elif page == "🔍 Predictions":
                     
                     # Feature Importance~
                     st.subheader("Key Drivers of Attrition")
+                    # Top-5 drivers (from provided feature importance image)
+                    st.markdown("""
+                    **Top 5 Global Drivers (summary):**
+                    - `cat__MaritalStatus_Single`: Marital status — Single
+                    - `num__OvertimeRatio`: Overtime ratio / hours
+                    - `num__Age`: Age
+                    - `num__TotalWorkingYears`: Total working years
+                    - `num__YearsAtCompany`: Years at company
+                    """)
                     if hasattr(model, 'steps'):
                         rf = model.steps[-1][1]
                         importances = pd.Series(rf.feature_importances_, index=TARGET_FEATURES).sort_values(ascending=False).head(8)
